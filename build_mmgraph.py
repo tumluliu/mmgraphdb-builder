@@ -104,7 +104,7 @@ class MultimodalGraphBuilder(object):
         self.edges_file = open(path.join(CSV_DIR, 'edges.csv'), 'w')
         self.switch_points_file = open(path.join(CSV_DIR, 'switch_points.csv'), 'w')
         self.parking_lot_file = open(path.join(CSV_DIR, 'car_parkings.csv'), 'w')
-        self.parking_lot_file.write('osm_id,name,lon,lat\n')
+        self.parking_lot_file.write('ref_poi_id,name,lon,lat\n')
         self.invalid_way_count = 0
         self.node_count = 0
         self.way_count = 0
@@ -343,7 +343,7 @@ class MultimodalGraphBuilder(object):
         return True
 
     def write_graph(self):
-        self.vertices_file.write('outdegree,vertex_id,osm_id,mode_id,lon,lat\n')
+        self.vertices_file.write('out_degree,vertex_id,raw_point_id,mode_id,lon,lat\n')
         for v in self.vertex_dict:
             self.vertices_file.write(str(self.vertex_dict[v].outdegree) + ',' +
                                      str(self.vertex_dict[v].vertex_id) + ',' +
@@ -353,7 +353,7 @@ class MultimodalGraphBuilder(object):
                                      str(self.vertex_dict[v].lat) + '\n')
 
         self.edges_file.write(
-            'length,speed_factor,mode_id,from_id,to_id,edge_id,osm_id\n')
+            'length,speed_factor,mode_id,from_id,to_id,edge_id,raw_link_id\n')
         for e in self.edge_dict:
             if not self.edge_dict[e].obsoleted:
                 self.edges_file.write(str(self.edge_dict[e].length) + ',' +
