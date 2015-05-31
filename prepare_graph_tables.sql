@@ -39,7 +39,8 @@ CREATE TABLE edges
     from_id bigint NOT NULL,
     to_id bigint NOT NULL,
     edge_id bigint NOT NULL,
-    raw_link_id bigint,
+    osm_id bigint,
+    link_id bigint,
     CONSTRAINT edges_pkey PRIMARY KEY (edge_id)
 )
 WITH (
