@@ -105,6 +105,7 @@ class MultimodalGraphBuilder(object):
         self.switch_points_file = open(path.join(CSV_DIR, 'switch_points.csv'), 'w')
         self.parking_lot_file = open(path.join(CSV_DIR, 'car_parkings.csv'), 'w')
         self.parking_lot_file.write('ref_poi_id,name,lon,lat\n')
+        self.street_junction_file = open(path.join(CSV_DIR, 'street_junctions.csv'), 'w')
         self.invalid_way_count = 0
         self.node_count = 0
         self.way_count = 0
@@ -134,6 +135,7 @@ class MultimodalGraphBuilder(object):
         self.multimodal_ways['private_car'] = []
         self.multimodal_ways['foot'] = []
         self.multimodal_ways['bicycle'] = []
+        self.street_junctions = {}
 
     def close_files(self):
         self.nodes_file.close()
@@ -150,6 +152,7 @@ class MultimodalGraphBuilder(object):
         self.edges_file.close()
         self.switch_points_file.close()
         self.parking_lot_file.close()
+        self.street_junction_file.close()
 
     def coords(self, coords):
         for osmid, lon, lat in coords:
@@ -183,6 +186,7 @@ class MultimodalGraphBuilder(object):
             ref: http://wiki.openstreetmap.org/wiki/OSM_tags_for_routing/Access-Restrictions
         """
         for osmid, tags, refs in ways:
+            valid = False
             if 'highway' in tags:
                 self.way_count += 1
                 highway = tags['highway']
@@ -201,10 +205,20 @@ class MultimodalGraphBuilder(object):
                     access['foot'] = highway in FOOT_WAY_TAGS and (foot != 'no')
                 if access['bicycle']:
                     self.multimodal_ways['bicycle'].append((osmid, tags, refs))
+                    valid = True
                 if access['car']:
                     self.multimodal_ways['private_car'].append((osmid, tags, refs))
+                    valid = True
                 if access['foot']:
                     self.multimodal_ways['foot'].append((osmid, tags, refs))
+                    valid = True
+                if valid is True:
+                    # The reason of using a dict to store street juctions osmid
+                    # list is just to ensure the list have no duplicates. 'STUB'
+                    # is solely a place holder.
+                    self.street_junctions[refs[0]] = 'STUB'
+                    self.street_junctions[refs[-1]] = 'STUB'
+
                 # if 'amenity' in tags:
                 # if tags['amenity'] == 'parking':
                     # print 'osmid: ' + str(osmid)
@@ -341,6 +355,14 @@ class MultimodalGraphBuilder(object):
             print 'found ' + str(invalid_vertex_count) + ' invalid vertices!'
             return False
         return True
+
+    def write_street_junctions(self):
+        self.street_junction_file.write('osm_id,lon,lat\n')
+        for j in self.street_junctions:
+            self.street_junction_file.write(str(j) + ',' +
+                                            str(self.coords_dict[j][0]) + ',' +
+                                            str(self.coords_dict[j][1]) + '\n')
+
 
     def write_graph(self):
         self.vertices_file.write('out_degree,vertex_id,raw_point_id,mode_id,lon,lat\n')
@@ -601,6 +623,7 @@ print colored(' done!', 'green')
 if builder.validate_graph():
     #builder.build_switch_points('private_car', 'foot', 'car_parking')
     builder.write_graph()
+    builder.write_street_junctions()
 
     print 'node count: ' + str(builder.node_count)
     print 'coords count: ' + str(builder.coords_count)
