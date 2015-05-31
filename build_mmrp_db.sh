@@ -37,6 +37,7 @@ echo "==== done! ===="
 # import shapefiles with overriding the old geometry tables
 echo "======== Step 4 of 10: Import OpenStreetMap data... ========"
 osm2pgsql -s -l -c -d $db_name -p osm -U $db_user $osm_data_file
+psql -d $db_name -U $db_user -f add_primary_key_to_osm_tables.sql
 echo "======== done! ========"
 echo "======== Step 5 of 10: Import UnitedMaps public transport and utilities data... ========"
 for shp_file in ./shp/*.shp
@@ -56,6 +57,7 @@ echo "======== Step 7 of 10: Import multimodal graph data from csv files to data
 psql -c "TRUNCATE vertices, edges;" -d $db_name -U $db_user
 psql -c "\COPY vertices (out_degree,vertex_id,raw_point_id,mode_id,lon,lat) FROM './csv/vertices.csv' WITH CSV HEADER;" -d $db_name -U $db_user
 psql -c "\COPY edges (length,speed_factor,mode_id,from_id,to_id,edge_id,raw_link_id) FROM './csv/edges.csv' WITH CSV HEADER;" -d $db_name -U $db_user
+psql -d $db_name -U $db_user -f import_street_junctions.sql
 echo "======== done! ========"
 #echo "======== Import initial switch points of car_parking type... ========"
 #psql -c "\COPY switch_points (cost,is_available,from_mode_id,to_mode_id,type_id,from_vertex_id,to_vertex_id,switch_point_id,ref_poi_id) FROM './csv/switch_points_car_parking.csv' WITH CSV HEADER;" -d $db_name -U $db_user
