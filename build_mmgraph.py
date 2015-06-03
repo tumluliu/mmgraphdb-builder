@@ -3,6 +3,7 @@ from math import radians, cos, sin, asin, sqrt
 from collections import deque
 from termcolor import colored
 from os import path
+import json
 import sys
 import argparse
 
@@ -109,6 +110,7 @@ class MultimodalGraphBuilder(object):
         self.parking_lot_file = open(path.join(CSV_DIR, 'car_parkings.csv'), 'w')
         self.parking_lot_file.write('ref_poi_id,name,lon,lat\n')
         self.street_junction_file = open(path.join(CSV_DIR, 'street_junctions.csv'), 'w')
+        self.street_line_file = open(path.join(CSV_DIR, 'street_lines.csv'), 'w')
         self.invalid_way_count = 0
         self.node_count = 0
         self.way_count = 0
@@ -134,15 +136,15 @@ class MultimodalGraphBuilder(object):
         self.edge_dict = {}
         self.switch_point_dict = {}
         self.parking_dict = {}
-        self.raw_multimodal_ways = {}
-        self.raw_multimodal_ways['private_car'] = []
-        self.raw_multimodal_ways['foot'] = []
-        self.raw_multimodal_ways['bicycle'] = []
         self.multimodal_ways = {}
         self.multimodal_ways['private_car'] = []
         self.multimodal_ways['foot'] = []
         self.multimodal_ways['bicycle'] = []
         self.street_junctions = {}
+        self.street_lines = {}
+        self.raw_highways = []
+        self.cut_highways = []
+        self.unique_way_ids = {}
 
     def close_files(self):
         self.nodes_file.close()
@@ -193,36 +195,42 @@ class MultimodalGraphBuilder(object):
             ref: http://wiki.openstreetmap.org/wiki/OSM_tags_for_routing/Access-Restrictions
         """
         for osmid, tags, refs in ways:
-            valid = False
             if 'highway' in tags:
+                self.raw_highways.append((osmid, tags, refs))
                 self.way_count += 1
-                highway = tags['highway']
-                vehicle = None if 'vehicle' not in tags else tags['vehicle']
-                foot = None if 'foot' not in tags else tags['foot']
-                access = {}
-                if vehicle is None:
-                    access['car'] = highway in CAR_WAY_TAGS
-                else:
-                    access['car'] = (highway in CAR_WAY_TAGS) and (vehicle != 'no')
+                self.unique_way_ids[osmid] = 'STUB'
+
+    def construct_multimodal_ways(self):
+        for w in self.cut_highways:
+            linkid = w['way_info'][0]
+            osmid = w['way_info'][1]
+            tags = w['way_info'][2]
+            refs = w['way_info'][3]
+            highway = tags['highway']
+            vehicle = None if 'vehicle' not in tags else tags['vehicle']
+            bicycle = None if 'bicycle' not in tags else tags['bicycle']
+            foot = None if 'foot' not in tags else tags['foot']
+            access = {}
+            if vehicle is None:
+                access['car'] = highway in CAR_WAY_TAGS
+            else:
+                access['car'] = vehicle != 'no'
+            if bicycle is None:
                 access['bicycle'] = highway in BICYCLE_WAY_TAGS
-                if foot is None:
-                    access['foot'] = highway in FOOT_WAY_TAGS
-                else:
-                    access['foot'] = highway in FOOT_WAY_TAGS and (foot != 'no')
-                if access['bicycle']:
-                    self.raw_multimodal_ways['bicycle'].append((osmid, tags, refs))
-                if access['car']:
-                    self.raw_multimodal_ways['private_car'].append((osmid, tags, refs))
-                if access['foot']:
-                    self.raw_multimodal_ways['foot'].append((osmid, tags, refs))
+            else:
+                access['bicycle'] = bicycle != 'no'
+            if foot is None:
+                access['foot'] = highway in FOOT_WAY_TAGS
+            else:
+                access['foot'] = foot != 'no'
+            if access['bicycle']:
+                self.multimodal_ways['bicycle'].append((linkid, osmid, tags, refs))
+            if access['car']:
+                self.multimodal_ways['private_car'].append((linkid, osmid, tags, refs))
+            if access['foot']:
+                self.multimodal_ways['foot'].append((linkid, osmid, tags, refs))
 
-                # if 'amenity' in tags:
-                # if tags['amenity'] == 'parking':
-                    # print 'osmid: ' + str(osmid)
-                    # print tags
-                    # self.parking_lot_ways_count += 1
-
-    def crossed_by_at(self, way_pts, knife):
+    def _get_cutting_point_by(self, way_pts, knife):
         inter_points = set(way_pts) & set(knife)
         if (len(inter_points) == 0) or (len(inter_points) > 1):
             # if there are more than 1 intersecting points between two ways,
@@ -231,38 +239,98 @@ class MultimodalGraphBuilder(object):
         cutting_point = inter_points.pop()
         if (cutting_point == way_pts[0]) or (cutting_point == way_pts[-1]):
             # if the intersecting point is just at the endings of way, no cutting
-            # will happen
-            return -1
+            # will happen. However, that means this way is connected with some
+            # other one else.
+            return 0
         return cutting_point
 
-    def cut_way_at(self, way, pt):
-        childway1 = (way[0]*10+1, way[1], way[2], way[3][0:way[3].index(pt)+1])
-        childway2 = (way[0]*10+2, way[1], way[2], way[3][way[3].index(pt):])
-        return childway1, childway2
+    def _gen_link_id(self, raw_id_list):
+        new_id_list = []
+        for i in raw_id_list:
+            new_id = i * 2
+            while new_id in self.unique_way_ids:
+                new_id += 1
+            new_id_list.append(new_id)
+            self.unique_way_ids[new_id] = 'STUB'
+        return new_id_list
 
-    def cut_crossed_ways(self, mode):
+    def _cut_way_at(self, way, pt):
+        link_id_list = self._gen_link_id([way['way_info'][0], way['way_info'][0]])
+        childway1 = {
+            'way_info': (link_id_list[0],
+                         way['way_info'][1],
+                         way['way_info'][2],
+                         way['way_info'][3][0:way['way_info'][3].index(pt)+1]),
+            'is_checked': False}
+        childway2 = {
+            'way_info': (link_id_list[1],
+                         way['way_info'][1],
+                         way['way_info'][2],
+                         way['way_info'][3][way['way_info'][3].index(pt):]),
+            'is_checked': False}
+        return [childway1, childway2]
+
+    def cut_crossed_ways(self):
         # A left-to-right deque of way to be processed
         dq = deque()
-        for osmid, tags, refs in self.raw_multimodal_ways[mode]:
+        for osmid, tags, refs in self.raw_highways:
             # The first osmid is for the new divided way, the second one is
             # reserved as a reference to the original osmid. They might be same
             # in the final list, or different if that way is a new one from
             # the cutting operation.
-            dq.append((osmid, osmid, tags, refs))
-        while len(dq) > 0:
-            total = len(dq)
-            sys.stdout.write("\r%d ways left" % total)
+            #if osmid == 78713667:
+                #print colored('\nAdd Arcisstrasse into dq before cutting', 'red')
+            #if osmid == 58561800:
+                #print colored('\nAdd Theresienstrasse into dq before cutting', 'red')
+            dq.append({'way_info': (osmid, osmid, tags, refs),
+                       'is_checked': False})
+            self.unique_way_ids[osmid] = 'STUB'
+        undetermined_ways = len(dq)
+        while undetermined_ways > 0:
+            sys.stdout.write("\r%d ways left" % undetermined_ways)
             sys.stdout.flush()
             way = dq.popleft()
-            is_way_ok = True
-            for i in list(dq)[1:]:
-                cross_point = self.crossed_by_at(way[3], i[3])
-                if cross_point != -1:
-                    dq.extend(self.cut_way_at(way, cross_point))
-                    is_way_ok = False
+            #print 'pop way link_id ' + str(way['way_info'][0])
+            if way['is_checked'] is True:
+                # this way has been checked and confirmed it has no more cutting
+                # point, so jump over it and put it back to the queue.
+                dq.append(way)
+                #print 'append way link_id ' + str(way['way_info'][0])
+                continue
+            #if way['way_info'][1] == 58561800:
+                #print '\nstart checking Theresienstrasse...'
+            undetermined_ways -= 1
+            # If a way is crossed by any other way in the middle, it needs cut.
+            has_cutting_point = False
+            # If a way does not touch any other way, it is 'solo'.
+            # A solo way should be kicked out since it forms a disconnected
+            # subgraph - a sort of noise in the multimodal graph for routing
+            is_way_solo = True
+            for i in list(dq):
+                cutting_point = self._get_cutting_point_by(way['way_info'][3], i['way_info'][3])
+                if (cutting_point != -1) and (cutting_point != 0):
+                    #if way['way_info'][1] == 58561800:
+                        #print '\ncutting Theresienstrasse...'
+                    has_cutting_point = True
+                    cut_ways = self._cut_way_at(way, cutting_point)
+                    #print "\nway " + str(way['way_info'][1]) + " has been cut into " + \
+                        #str([i['way_info'][0] for i in cut_ways])
+                    #print "\ndq length before extending: " + str(len(dq))
+                    dq.extend(cut_ways)
+                    #print "\ndq length after extending: " + str(len(dq))
+                    undetermined_ways += 2
                     break
-            if is_way_ok:
-                self.multimodal_ways[mode].append(way)
+                elif cutting_point == 0:
+                    is_way_solo = False
+            #if has_cutting_point and (not is_way_solo):
+            # A way does not need cut is eligable to be added to the way dict
+            if (not has_cutting_point) and (not is_way_solo):
+                #if way['way_info'][1] == 78713667:
+                    #print colored('\nArcisstrasse way is determined')
+                way['is_checked'] = True
+                dq.append(way)
+                #print 'append way link_id ' + str(way['way_info'][0])
+        self.cut_highways = list(dq)
 
     def build_mode_graph(self, mode):
         total = len(self.multimodal_ways[mode])
@@ -273,7 +341,7 @@ class MultimodalGraphBuilder(object):
             sys.stdout.flush()
             if self.validate_way(osmid, tags, refs):
                 self.invalid_way_count += 1
-                print 'invalid way: raw_osm_id ' + str(osmid) + '; new_id ' + str(newid)
+                print '\ninvalid way: raw_osm_id ' + str(osmid) + '; new_id ' + str(linkid)
             else:
                 way_length = self.calc_way_length(refs)
                 oneway = False
@@ -359,7 +427,7 @@ class MultimodalGraphBuilder(object):
                      self.vertex_dict[v].outgoings[0].length)
                 for e in self.vertex_dict[v].outgoings[1:]:
                     if e.to_id in outgoings_digest_dict:
-                        #print 'found hyper edge, to_vertex_id is ' + str(e.to_id)
+                        #print 'found hyper edge: ' + str(v) + '-->' + str(e.to_id)
                         # found hyper edge
                         obsoleted_edges += 1
                         self.vertex_dict[v].outdegree -= 1
@@ -372,7 +440,7 @@ class MultimodalGraphBuilder(object):
                     else:
                         # add the new edge to digest
                         outgoings_digest_dict[e.to_id] = (e.edge_id, e.length)
-        print 'obsoleted edge count: ' + str(obsoleted_edges)
+        print '\nMarked ' + str(obsoleted_edges) + ' edges as obsoleted.'
 
     def validate_graph(self):
         invalid_vertex_count = 0
@@ -383,23 +451,51 @@ class MultimodalGraphBuilder(object):
                     efficient_to_vertex_list.append(e.to_id)
             if len(efficient_to_vertex_list) != len(set(efficient_to_vertex_list)):
                 print 'invalid vertex with hyper-edge found! vertex_id is ' + str(v)
-                print 'to_vertex list: ' + str(efficient_to_vertex_list)
+                to_v_id_list = [e.to_id for e in self.vertex_dict[v].outgoings]
+                print 'to_vertex list from outgoings is ' + str(to_v_id_list)
+                print 'to_vertex list from efficient_to_vertex_list: ' + str(efficient_to_vertex_list)
                 invalid_vertex_count += 1
             if self.vertex_dict[v].outdegree != len(efficient_to_vertex_list):
                 print 'invalid vertex found! vertex_id is ' + str(v)
                 print 'claimed outdegree is ' + str(self.vertex_dict[v].outdegree)
-                print 'real outdegree is ' + str(len(self.vertex_dict[v].outgoings))
+                #print 'real outdegree is ' + str(len(self.vertex_dict[v].outgoings))
+                print 'real outdegree is ' + str(len(efficient_to_vertex_list))
+                to_v_id_list = [e.to_id for e in self.vertex_dict[v].outgoings]
+                print 'to_vertex list from outgoings is ' + str(to_v_id_list)
+                print 'to_vertex list from efficient_to_vertex_list is ' + str(efficient_to_vertex_list)
                 invalid_vertex_count += 1
         if invalid_vertex_count > 0:
             print 'found ' + str(invalid_vertex_count) + ' invalid vertices!'
             return False
         return True
 
-    def build_street_junctions(self):
-        for m in self.multimodal_ways:
-            for linkid, osmid, tags, refs in self.multimodal_ways[m]:
-                self.street_junctions[refs[0]] = 'STUB';
-                self.street_junctions[refs[-1]] = 'STUB';
+    def way_to_geojson(self, pt_id_list):
+        geojson = {"type": "LineString", "coordinates": []}
+        for p in pt_id_list:
+            pt_coords = [self.coords_dict[p][0], self.coords_dict[p][1]]
+            geojson["coordinates"].append(pt_coords)
+        return geojson
+
+    def build_street_features(self):
+        for w in self.cut_highways:
+            linkid = w['way_info'][0]
+            osmid = w['way_info'][1]
+            refs = w['way_info'][3]
+            self.street_junctions[refs[0]] = 'STUB';
+            self.street_junctions[refs[-1]] = 'STUB';
+            self.street_lines[linkid] = {'osm_id': osmid,
+                                        'from_node': refs[0],
+                                        'to_node': refs[-1],
+                                        'geom': json.dumps(self.way_to_geojson(refs))}
+
+    def write_street_lines(self):
+        self.street_line_file.write('link_id,osm_id,from_node,to_node,geom\n')
+        for i in self.street_lines:
+            self.street_line_file.write(str(i) + ';' +
+                                        str(self.street_lines[i]['osm_id']) + ';' +
+                                        str(self.street_lines[i]['from_node']) + ';' +
+                                        str(self.street_lines[i]['to_node']) + ';' +
+                                        str(self.street_lines[i]['geom']) + '\n')
 
     def write_street_junctions(self):
         self.street_junction_file.write('osm_id,lon,lat\n')
@@ -448,6 +544,8 @@ class MultimodalGraphBuilder(object):
 
     def add_edge(self, link_id, osm_id, mode_id, way_node_list, way_length,
                  avg_speed_factor, oneway):
+        if osm_id == 78713667:
+            print colored('Add Arcisstrasse to edges')
         forward_edge = Edge()
         forward_edge.osm_id = osm_id
         forward_edge.link_id = link_id
@@ -609,6 +707,7 @@ FOOT_WAY_TAGS = ['footway',
                  'residential',
                  'living_street',
                  'road',
+                 'service',
                  'track',
                  'path',
                  'corridor',
@@ -658,20 +757,19 @@ p = OSMParser(concurrency=2, coords_callback=builder.coords,
 print 'Reading and parsing raw OSM data...',
 p.parse(OSM_FILE)
 print colored(' done!', 'green')
-print 'Cutting crossed ways in foot ways...'
-builder.cut_crossed_ways('foot')
+print 'Cutting crossed ways in raw highways...'
+builder.cut_crossed_ways()
 print colored(' done!', 'green')
+print 'Constructing multimodal ways...'
+builder.construct_multimodal_ways()
+print 'Collect ' + str(len(builder.multimodal_ways['foot'])) + ' ways for foot from cut highways'
+print 'Collect ' + str(len(builder.multimodal_ways['private_car'])) + ' ways for private_car from cut highways'
+print 'Collect ' + str(len(builder.multimodal_ways['bicycle'])) + ' ways for bicycle from cut highways'
 print 'Building foot network... '
 builder.build_mode_graph('foot')
 print colored(' done!', 'green')
-print 'Cutting crossed ways in motorized ways...'
-builder.cut_crossed_ways('private_car')
-print colored(' done!', 'green')
 print 'Building car network... '
 builder.build_mode_graph('private_car')
-print colored(' done!', 'green')
-print 'Cutting crossed ways in bicycle ways...'
-builder.cut_crossed_ways('bicycle')
 print colored(' done!', 'green')
 print 'Building bicycle network... '
 builder.build_mode_graph('bicycle')
@@ -682,9 +780,8 @@ print colored(' done!', 'green')
 if builder.validate_graph():
     #builder.build_switch_points('private_car', 'foot', 'car_parking')
     builder.write_graph()
-    #builder.build_street_lines()
-    #builder.write_street_lines()
-    builder.build_street_junctions()
+    builder.build_street_features()
+    builder.write_street_lines()
     builder.write_street_junctions()
 
     print 'node count: ' + str(builder.node_count)
