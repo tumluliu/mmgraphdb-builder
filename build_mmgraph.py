@@ -760,6 +760,9 @@ print colored(' done!', 'green')
 print 'Cutting crossed ways in raw highways...'
 builder.cut_crossed_ways()
 print colored(' done!', 'green')
+builder.build_street_features()
+builder.write_street_lines()
+builder.write_street_junctions()
 print 'Constructing multimodal ways...'
 builder.construct_multimodal_ways()
 print 'Collect ' + str(len(builder.multimodal_ways['foot'])) + ' ways for foot from cut highways'
@@ -780,10 +783,6 @@ print colored(' done!', 'green')
 if builder.validate_graph():
     #builder.build_switch_points('private_car', 'foot', 'car_parking')
     builder.write_graph()
-    builder.build_street_features()
-    builder.write_street_lines()
-    builder.write_street_junctions()
-
     print 'node count: ' + str(builder.node_count)
     print 'coords count: ' + str(builder.coords_count)
     print 'way count: ' + str(builder.way_count)
