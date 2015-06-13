@@ -8,9 +8,9 @@ echo "============ Multimodal graph builder ============"
 echo "======== Step 1 of 10: Cleanup environment... ========"
 mkdir -p tmp
 mkdir -p bak
-rm csv/vertices.csv
-rm csv/edges.csv
-rm csv/car_parkings.csv
+#rm csv/vertices.csv
+#rm csv/edges.csv
+#rm csv/car_parkings.csv
 echo "======== done! ========"
 # backup old database if it exists, or create a new one if not
 echo "======== Step 2 of 10: Preparing database... ========"
@@ -49,15 +49,17 @@ done
 echo "======== done! ========"
 # generate multimodal graph edges and vertices in csv files
 echo "======== Step 6 of 10: Build multimodal graph data in csv files... ========"
-python build_mmgraph.py $osm_data_file
+#python build_mmgraph.py $osm_data_file
 tail -n +2 ./csv/public_transit_vertices.csv >> ./csv/vertices.csv
 tail -n +2 ./csv/public_transit_edges.csv >> ./csv/edges.csv
 echo "======== done! ========"
 echo "======== Step 7 of 10: Import multimodal graph data from csv files to database... ========"
 psql -c "TRUNCATE vertices, edges;" -d $db_name -U $db_user
 psql -c "\COPY vertices (out_degree,vertex_id,raw_point_id,mode_id,lon,lat) FROM './csv/vertices.csv' WITH CSV HEADER;" -d $db_name -U $db_user
-psql -c "\COPY edges (length,speed_factor,mode_id,from_id,to_id,edge_id,raw_link_id) FROM './csv/edges.csv' WITH CSV HEADER;" -d $db_name -U $db_user
+psql -c "\COPY edges (length,speed_factor,mode_id,from_id,to_id,edge_id,link_id,osm_id) FROM './csv/edges.csv' WITH CSV HEADER;" -d $db_name -U $db_user
 psql -d $db_name -U $db_user -f import_street_junctions.sql
+psql -d $db_name -U $db_user -f import_street_lines.sql
+psql -d $db_name -U $db_user -f import_car_parkings.sql
 echo "======== done! ========"
 #echo "======== Import initial switch points of car_parking type... ========"
 #psql -c "\COPY switch_points (cost,is_available,from_mode_id,to_mode_id,type_id,from_vertex_id,to_vertex_id,switch_point_id,ref_poi_id) FROM './csv/switch_points_car_parking.csv' WITH CSV HEADER;" -d $db_name -U $db_user
